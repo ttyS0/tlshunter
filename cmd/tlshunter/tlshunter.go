@@ -317,5 +317,6 @@ func main() {
 		}
 
 		fmt.Println(analysis)
+		fmt.Println()
 	}
 }
