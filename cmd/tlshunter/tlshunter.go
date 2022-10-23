@@ -210,7 +210,7 @@ func (a *Analysis) check() (ret []Risk) {
 
 			if !pinned {
 				ret = append(ret, Risk{
-					Type:   RiskUserAnchors,
+					Type:   RiskUnpinned,
 					Reason: fmt.Sprintf("%s does not contain pinned certificates.", section),
 				})
 			}
