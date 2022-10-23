@@ -1,4 +1,4 @@
-module github.com/sigeryang/droid-tlshunter
+module github.com/sigeryang/tlshunter
 
 go 1.19
 

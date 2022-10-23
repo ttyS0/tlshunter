@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/avast/apkparser"
-	"github.com/sigeryang/droid-tlshunter/internal/manifest"
+	"github.com/sigeryang/tlshunter/internal/manifest"
 )
 
 func ParseAPK(file string) (*manifest.Manifest, *apkparser.ZipReader, error) {
