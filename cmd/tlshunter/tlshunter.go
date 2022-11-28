@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"crypto/x509"
 	"encoding/xml"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,11 +16,11 @@ import (
 	"github.com/sigeryang/tlshunter/internal/manifest"
 )
 
-func ParseAPK(file string) (*manifest.Manifest, *apkparser.ZipReader, error) {
+func ParseAPK(file string) (*apkparser.ZipReader, *manifest.Manifest, *apkparser.ResourceTable, error) {
 	zip, err := apkparser.OpenZip(file)
 
 	if err != nil {
-		return nil, nil, fmt.Errorf(`open zip error: %v`, err)
+		return nil, nil, nil, fmt.Errorf(`open zip error: %v`, err)
 	}
 
 	buf := new(bytes.Buffer)
@@ -25,11 +28,11 @@ func ParseAPK(file string) (*manifest.Manifest, *apkparser.ZipReader, error) {
 	rErr, mErr := apkparser.ParseApkWithZip(zip, encoder)
 
 	if mErr != nil {
-		return nil, nil, fmt.Errorf(`parse manifest error: %v`, mErr)
+		return nil, nil, nil, fmt.Errorf(`parse manifest error: %v`, mErr)
 	}
 
 	if rErr != nil {
-		return nil, nil, fmt.Errorf(`parse resources error: %v`, rErr)
+		return nil, nil, nil, fmt.Errorf(`parse resources error: %v`, rErr)
 	}
 
 	m := manifest.Manifest{}
@@ -37,7 +40,22 @@ func ParseAPK(file string) (*manifest.Manifest, *apkparser.ZipReader, error) {
 		log.Printf(`unmarshal manifest error: %v`, err)
 	}
 
-	return &m, zip, nil
+	resourcesFile := zip.File["resources.arsc"]
+	if resourcesFile == nil {
+		return nil, nil, nil, fmt.Errorf("cannot find resources file")
+	}
+	if err := resourcesFile.Open(); err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to open resources.arsc: %v", err)
+	}
+	defer resourcesFile.Close()
+
+	resources, err := apkparser.ParseResourceTable(resourcesFile)
+
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf(`parse resources error: %v`, rErr)
+	}
+
+	return zip, &m, resources, nil
 }
 
 func SDKVersionToAndroidMajor(sdkVersion int) int {
@@ -87,6 +105,9 @@ type Analysis struct {
 	defaults AndroidDefaults
 	m        *manifest.Manifest
 	nsc      *manifest.NetworkSecurityConfig
+
+	zip       *apkparser.ZipReader
+	resources *apkparser.ResourceTable
 }
 
 type Risk struct {
@@ -105,8 +126,11 @@ const (
 	RiskNSCMissing RiskType = iota
 	RiskCleartext
 	RiskUserAnchors
+	RiskAnchorsOverridePinning
 	RiskUnpinned
 	RiskPinningExpiration
+	RiskProxyAnchors
+	RiskMalformedNSC
 )
 
 func (t RiskType) Description() string {
@@ -117,10 +141,14 @@ func (t RiskType) Description() string {
 		return "Allow cleartext traffic to be transferred."
 	case RiskUserAnchors:
 		return "Allow users to trust 3rd-party CAs."
+	case RiskAnchorsOverridePinning:
+		return "Trust anchors override pinned certificates."
 	case RiskUnpinned:
 		return "Does not pin any certificates."
-	case RiskPinningExpiration:
-		return "A pin set is about to expire / was already expired."
+	case RiskProxyAnchors:
+		return "Trust anchors contain proxy tool CA."
+	case RiskMalformedNSC:
+		return "Domains in NSC contain invalid hostnames."
 	default:
 		return "(unknown)"
 	}
@@ -138,7 +166,7 @@ func (a *Analysis) check() (ret []Risk) {
 		{
 			section := fmt.Sprintf("%s base config", section)
 			baseConfig := nsc.BaseConfig
-			if baseConfig == nil || baseConfig.CleartextTrafficPermitted == nil {
+			if baseConfig == nil {
 				if defaults.AllowCleartext {
 					ret = append(ret, Risk{
 						Type:   RiskCleartext,
@@ -146,12 +174,20 @@ func (a *Analysis) check() (ret []Risk) {
 					})
 				}
 			} else {
-				if *baseConfig.CleartextTrafficPermitted {
+				if baseConfig.CleartextTrafficPermitted == nil {
+					if defaults.AllowCleartext {
+						ret = append(ret, Risk{
+							Type:   RiskCleartext,
+							Reason: fmt.Sprintf("%s defaults permit cleartext traffic.", section),
+						})
+					}
+				} else if *baseConfig.CleartextTrafficPermitted {
 					ret = append(ret, Risk{
 						Type:   RiskCleartext,
-						Reason: fmt.Sprintf("%s permit cleartext traffic.", section),
+						Reason: fmt.Sprintf("%s permits cleartext traffic.", section),
 					})
 				}
+
 				anchors := baseConfig.TrustAnchors
 				if anchors != nil {
 					for i, certs := range anchors.Certificates {
@@ -166,9 +202,39 @@ func (a *Analysis) check() (ret []Risk) {
 						// OverridePins is false by default under base config
 						if certs.OverridePins != nil && *certs.OverridePins {
 							ret = append(ret, Risk{
-								Type:   RiskUserAnchors,
+								Type:   RiskAnchorsOverridePinning,
 								Reason: fmt.Sprintf("%s override certificate pinning.", section),
 							})
+						}
+
+						if certs.Src != "system" && certs.Src != "user" {
+							res := strings.TrimPrefix(certs.Src, "@")
+							resId, err := strconv.ParseInt(res, 16, 32)
+							if err != nil {
+								continue
+							}
+							entry, err := a.resources.GetResourceEntry(uint32(resId))
+							if err != nil {
+								continue
+							}
+							filename, _ := entry.GetValue().String()
+							if err := a.zip.File[filename].Open(); err != nil {
+								continue
+							}
+							ca, err := io.ReadAll(a.zip.File[filename])
+							if err != nil {
+								continue
+							}
+							cert, err := x509.ParseCertificate(ca)
+							if err != nil {
+								continue
+							}
+							if strings.Contains(strings.ToLower(cert.Subject.String()), "proxy") {
+								ret = append(ret, Risk{
+									Type:   RiskUserAnchors,
+									Reason: fmt.Sprintf(`%s contain proxy tool CA with subject "%s".`, section, cert.Subject.String()),
+								})
+							}
 						}
 					}
 				}
@@ -206,6 +272,47 @@ func (a *Analysis) check() (ret []Risk) {
 						pinned = true
 					}
 				}
+				for _, domain := range domainConfig.Domains {
+					if strings.HasPrefix(domain.Data, "http") {
+						ret = append(ret, Risk{
+							Type:   RiskMalformedNSC,
+							Reason: fmt.Sprintf(`%s domains contain malformed hostname "%s".`, section, domain.Data),
+						})
+					}
+				}
+				if domainConfig.TrustAnchors != nil {
+					for _, certs := range domainConfig.TrustAnchors.Certificates {
+						if certs.Src != "system" && certs.Src != "user" {
+							res := strings.TrimPrefix(certs.Src, "@")
+							resId, err := strconv.ParseInt(res, 16, 32)
+							if err != nil {
+								continue
+							}
+							entry, err := a.resources.GetResourceEntry(uint32(resId))
+							if err != nil {
+								continue
+							}
+							filename, _ := entry.GetValue().String()
+							if err := a.zip.File[filename].Open(); err != nil {
+								continue
+							}
+							ca, err := io.ReadAll(a.zip.File[filename])
+							if err != nil {
+								continue
+							}
+							cert, err := x509.ParseCertificate(ca)
+							if err != nil {
+								continue
+							}
+							if strings.Contains(strings.ToLower(cert.Subject.String()), "proxy") {
+								ret = append(ret, Risk{
+									Type:   RiskUserAnchors,
+									Reason: fmt.Sprintf(`%s trust anchors contain proxy tool CA with subject "%s".`, section, cert.Subject.String()),
+								})
+							}
+						}
+					}
+				}
 			}
 
 			if !pinned {
@@ -234,7 +341,7 @@ func (a *Analysis) check() (ret []Risk) {
 		} else if *app.UsesCleartextTraffic {
 			ret = append(ret, Risk{
 				Type:   RiskCleartext,
-				Reason: fmt.Sprintf("%s permit cleartext traffic.", section),
+				Reason: fmt.Sprintf("%s permits cleartext traffic.", section),
 			})
 		}
 	}
@@ -255,13 +362,15 @@ Risks   :
 %s`, a.File, a.Name, a.TargetVersion, strings.Join(risks, "\n")), "\n")
 }
 
-func Analyze(file string, m *manifest.Manifest, nsc *manifest.NetworkSecurityConfig) (*Analysis, error) {
+func Analyze(file string, m *manifest.Manifest, nsc *manifest.NetworkSecurityConfig, zip *apkparser.ZipReader, resources *apkparser.ResourceTable) (*Analysis, error) {
 	ret := &Analysis{
 		File:          file,
 		Name:          m.Application.Name,
 		TargetVersion: SDKVersionToAndroidMajor(m.UsesSDK.TargetSDKVersion),
 		m:             m,
 		nsc:           nsc,
+		zip:           zip,
+		resources:     resources,
 	}
 
 	// Android 7+ supports NSC
@@ -280,8 +389,10 @@ func Analyze(file string, m *manifest.Manifest, nsc *manifest.NetworkSecurityCon
 func main() {
 	flag.Parse()
 
+	riskMap := make(map[RiskType]map[string][]*Analysis)
+
 	for _, file := range flag.Args() {
-		m, zip, err := ParseAPK(file)
+		zip, m, resources, err := ParseAPK(file)
 		if err != nil {
 			log.Printf(`cannot parse APK "%s": %v`, file, err)
 			continue
@@ -310,13 +421,41 @@ func main() {
 			}
 		}
 
-		analysis, err := Analyze(file, m, nsc)
+		analysis, err := Analyze(file, m, nsc, zip, resources)
 		if err != nil {
 			log.Printf(`cannot analyze "%s": %v`, file, err)
 			continue
 		}
 
+		for _, risk := range analysis.Risks {
+			if riskMap[risk.Type] == nil {
+				riskMap[risk.Type] = make(map[string][]*Analysis)
+			}
+			reasonMap := riskMap[risk.Type]
+			reasonMap[risk.Reason] = append(reasonMap[risk.Reason], analysis)
+		}
+
 		fmt.Println(analysis)
+		fmt.Println()
+	}
+
+	fmt.Println("Statistics:")
+	fmt.Println()
+	for riskType, reasonMap := range riskMap {
+		total := 0
+
+		for _, apps := range reasonMap {
+			total += len(apps)
+		}
+		fmt.Printf("Risk: %v Count: %d\n", riskType, total)
+
+		for reason, apps := range reasonMap {
+			total += len(apps)
+			fmt.Printf("    Reason: %s Count: %d\n", reason, len(apps))
+			for _, app := range apps {
+				fmt.Printf("        File: %s Name: %s\n", app.File, app.Name)
+			}
+		}
 		fmt.Println()
 	}
 }

@@ -3,9 +3,9 @@ package manifest
 import "encoding/xml"
 
 type Manifest struct {
-	XMLName     xml.Name `xml:"manifest"`
-	UsesSDK     UsesSDK
-	Application Application
+	XMLName     xml.Name    `xml:"manifest"`
+	UsesSDK     UsesSDK     `xml:"uses-sdk"`
+	Application Application `xml:"application"`
 }
 
 type UsesSDK struct {
@@ -25,41 +25,42 @@ type Application struct {
 
 // Reference: https://developer.android.com/training/articles/security-config#FileFormat
 type NetworkSecurityConfig struct {
-	XMLName        xml.Name `xml:"network-security-config"`
-	BaseConfig     *BaseConfig
-	DomainConfig   []*DomainConfig
-	DebugOverrides *DebugOverrides
+	XMLName        xml.Name        `xml:"network-security-config"`
+	BaseConfig     *BaseConfig     `xml:"base-config"`
+	DomainConfig   []*DomainConfig `xml:"domain-config"`
+	DebugOverrides *DebugOverrides `xml:"debug-overrides"`
 }
 
 type BaseConfig struct {
-	XMLName                   xml.Name `xml:"base-config"`
-	CleartextTrafficPermitted *bool    `xml:"cleartextTrafficPermitted,attr"`
-	TrustAnchors              *TrustAnchors
+	XMLName                   xml.Name      `xml:"base-config"`
+	CleartextTrafficPermitted *bool         `xml:"cleartextTrafficPermitted,attr"`
+	TrustAnchors              *TrustAnchors `xml:"trust-anchors"`
 }
 
 type DomainConfig struct {
-	XMLName                   xml.Name `xml:"domain-config"`
-	CleartextTrafficPermitted *bool    `xml:"cleartextTrafficPermitted,attr"`
-	Domains                   []*Domain
-	TrustAnchors              *TrustAnchors
-	PinSet                    *PinSet
-	Children                  []*DomainConfig
+	XMLName                   xml.Name        `xml:"domain-config"`
+	CleartextTrafficPermitted *bool           `xml:"cleartextTrafficPermitted,attr"`
+	Domains                   []*Domain       `xml:"domain"`
+	TrustAnchors              *TrustAnchors   `xml:"trust-anchors"`
+	PinSet                    *PinSet         `xml:"pin-set"`
+	Children                  []*DomainConfig `xml:"domain-config"`
 }
 
 type Domain struct {
-	IncludeSubdomains bool   `xml:"includeSubdomains,attr"`
-	Data              string `xml:",innerxml"`
+	XMLName           xml.Name `xml:"domain"`
+	IncludeSubdomains bool     `xml:"includeSubdomains,attr"`
+	Data              string   `xml:",innerxml"`
 }
 
 type DebugOverrides struct {
-	XMLName      xml.Name `xml:"debug-overrides"`
-	TrustAnchors *TrustAnchors
+	XMLName      xml.Name      `xml:"debug-overrides"`
+	TrustAnchors *TrustAnchors `xml:"trust-anchors"`
 }
 
 type TrustAnchors struct {
 	XMLName xml.Name `xml:"trust-anchors"`
 
-	Certificates []*Certificates
+	Certificates []*Certificates `xml:"certificates"`
 }
 
 type Certificates struct {
@@ -71,7 +72,7 @@ type Certificates struct {
 type PinSet struct {
 	XMLName    xml.Name `xml:"pin-set"`
 	Expiration string   `xml:"expiration"`
-	Pins       []*Pin
+	Pins       []*Pin   `xml:"pin"`
 }
 
 type Pin struct {

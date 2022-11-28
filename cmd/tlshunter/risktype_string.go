@@ -11,13 +11,16 @@ func _() {
 	_ = x[RiskNSCMissing-0]
 	_ = x[RiskCleartext-1]
 	_ = x[RiskUserAnchors-2]
-	_ = x[RiskUnpinned-3]
-	_ = x[RiskPinningExpiration-4]
+	_ = x[RiskAnchorsOverridePinning-3]
+	_ = x[RiskUnpinned-4]
+	_ = x[RiskPinningExpiration-5]
+	_ = x[RiskProxyAnchors-6]
+	_ = x[RiskMalformedNSC-7]
 }
 
-const _RiskType_name = "RiskNSCMissingRiskCleartextRiskUserAnchorsRiskUnpinnedRiskPinningExpiration"
+const _RiskType_name = "RiskNSCMissingRiskCleartextRiskUserAnchorsRiskAnchorsOverridePinningRiskUnpinnedRiskPinningExpirationRiskProxyAnchorsRiskMalformedNSC"
 
-var _RiskType_index = [...]uint8{0, 14, 27, 42, 54, 75}
+var _RiskType_index = [...]uint8{0, 14, 27, 42, 68, 80, 101, 117, 133}
 
 func (i RiskType) String() string {
 	if i < 0 || i >= RiskType(len(_RiskType_index)-1) {

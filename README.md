@@ -12,6 +12,8 @@ Typical misconfiguration:
 * [x] Permits cleartext traffic in network security configuration (a.k.a. NSC)
 * [x] Does not pin any certificates in NSC
 * [x] User CA store overrides pinned certificates in NSC
+* [x] Trust anchors contain proxy tool CA
+* [x] Malformed domain config
 * [x] ...
 
 ## Usage
